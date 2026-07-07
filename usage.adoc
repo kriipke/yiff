@@ -2,7 +2,7 @@
 
 == Compare Two Side-by-Side Files
 
-`$  yiff ./tests/values-dev.yaml ./tests/values-prod.yaml`
+`$  driftmap ./tests/values-dev.yaml ./tests/values-prod.yaml`
 +++
 <body>
 <pre>
@@ -30,7 +30,7 @@
 == Compare Two Side-by-Side Files
 
 
-`$  yiff tests/values-before.yaml tests/values-after.yaml`
+`$  driftmap tests/values-before.yaml tests/values-after.yaml`
 +++
 <body>
 <pre>

@@ -4,7 +4,7 @@ import (
 	"log"
 	"net/http"
 
-	httpx "github.com/kriipke/yiff/internal/adapters/http"
+	httpx "github.com/kriipke/driftmap/internal/adapters/http"
 )
 
 func main() {

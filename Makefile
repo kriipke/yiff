@@ -1,2 +1,8 @@
 build-cli:
-	go build -o yiff cmd/cli/main.go
+	go build -o driftmap ./cmd/cli
+
+build-api:
+	go build -o driftmap-api ./cmd/api
+
+test:
+	go test ./...

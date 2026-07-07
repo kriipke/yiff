@@ -1,4 +1,4 @@
-module github.com/kriipke/yiff
+module github.com/kriipke/driftmap
 
 go 1.23.0
 

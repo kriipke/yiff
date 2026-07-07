@@ -1,8 +1,8 @@
 package main
 
 import (
+	"github.com/kriipke/driftmap/internal/adapters/cli"
 	"os"
-	"github.com/kriipke/yiff/internal/adapters/cli"
 )
 
 func main() {

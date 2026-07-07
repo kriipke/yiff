@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/kriipke/yiff/pkg/differ"
+	"github.com/kriipke/driftmap/pkg/differ"
 )
 
 type diffRequest struct {

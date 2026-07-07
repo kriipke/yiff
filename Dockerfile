@@ -17,7 +17,7 @@ RUN go mod download
 COPY . .
 
 # Build the application (replace main.go path if your entrypoint differs)
-RUN go build -o yiff-api ./cmd/api/main.go
+RUN go build -o driftmap-api ./cmd/api/main.go
 
 # Final minimal image
 FROM alpine:3.20
@@ -26,10 +26,10 @@ FROM alpine:3.20
 WORKDIR /app
 
 # Copy the built binary from builder stage
-COPY --from=builder /app/yiff-api .
+COPY --from=builder /app/driftmap-api .
 
 # Expose port (replace 8080 with your actual API port)
 EXPOSE 8080
 
 # Set entrypoint
-ENTRYPOINT ["./yiff-api"]
+ENTRYPOINT ["./driftmap-api"]

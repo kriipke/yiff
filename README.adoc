@@ -1,25 +1,60 @@
-= **`+yx+`** -- __YAML diff__
+= **`+driftmap+`** -- __YAML drift detection__
+
+**DriftMap** reports the _drift_ between two sets of YAML configuration. It flattens
+each side to dotted key paths and shows which values were changed, added, or removed.
+
+It is built for two workflows in particular:
+
+* **Helm chart values** -- compare two `values.yaml` files (for example
+  `values-dev.yaml` vs `values-prod.yaml`) to see exactly which chart values differ
+  between environments or releases.
+* **Vault secrets** -- compare two directories of secrets that were pulled down as
+  YAML files with `vaultsync` (https://github.com/kriipke/vaultsync[kriipke/vaultsync]),
+  for example a `before/` and `after/` snapshot, to audit what changed across a sync.
+
+`A` and `B` may both be *files* (single-file diff) or both be *directories*
+(recursive, per-file diff). You can also compare a path between two git refs with
+`--from`/`--to`/`--path`.
+
+=== Install
+
+[source,shell]
+----
+$ go install github.com/kriipke/driftmap/cmd/cli@latest
+# installs a `cli` binary; rename to `driftmap`, or build locally:
+$ make build-cli   # produces ./driftmap
+----
 
 === Usage
 
 ```
-Usage: $(basename "$0") [OPTIONS]
+driftmap [A] [B] [flags]
 
-Install a statically-linked nnn binary and its plugin installer.
+Arguments:
+  A, B    Two values.yaml files, or two directories of YAML files.
+          Both must be files, or both must be directories.
 
-Options:
-  --flavor    [nerd|emoji|icons]   Flavor of nnn to install (default: nerd)
-  --version   VERSION              nnn version to install (default: 5.1)
-  --prefix    PREFIX               Installation prefix (default: /usr/local)
-  --help                           Show this help message and exit
+Flags:
+  -o, --output string   Output format: 'shell' (default), 'yaml', or 'columns'
+      --from string     Git ref/tag/commit for the base (used with --to and --path)
+      --to string       Git ref/tag/commit for the target (used with --from and --path)
+      --path string     Compare all YAML files under this path between --from and --to
+  -h, --help            Show help
 
 Examples:
-  ./install-nnn.sh --flavor emoji --version 5.1 --prefix /usr/local
+  # Compare two Helm values files
+  driftmap ./tests/values-dev.yaml ./tests/values-prod.yaml
+
+  # Compare two directories of vaultsync-exported secrets
+  driftmap ./vault-before ./vault-after
+
+  # Compare a chart directory between two git refs
+  driftmap --from v1.2.0 --to v1.3.0 --path charts/app
 ```
 
-==== Compare Two Side-by-Side Files
+==== Compare Two Helm Values Files
 
-`$  yx ./tests/values-dev.yaml ./tests/values-prod.yaml`
+`$  driftmap ./tests/values-dev.yaml ./tests/values-prod.yaml`
 ++++
 <pre>
 <span style="font-weight:bold;">complexList[1].name</span>: bar → <span style="font-weight:bold;color:olive;">baz</span>
@@ -28,6 +63,26 @@ Examples:
 <span style="font-weight:bold;">replicaCount</span>: 2 → <span style="font-weight:bold;color:olive;">1</span>
 </pre>
 ++++
+
+==== Compare Two Directories of Vault Secrets
+
+Given two directories of YAML files exported by `vaultsync`, DriftMap reports a
+per-file summary of changed, added, and removed files:
+
+[source,shell]
+----
+$ driftmap ./vault-before ./vault-after
+Changed files:
+
+# db.yaml
+password: old → new
+
+Added files:
+  sub/new-service.yaml
+
+Removed files:
+  legacy-token.yaml
+----
 
 === Run as a Service
 
@@ -47,7 +102,7 @@ Again, from the root of the repository:
 
 [source,shell]
 ----
-$ curl -sSd @tests/testdata.json http://localhost:8080/diff | jq        
+$ curl -sSd @tests/testdata.json http://localhost:8080/diff | jq
 
 {
   "variables": [
@@ -67,10 +122,10 @@ From the root of the repository:
 
 [source,shell]
 ----
-$ docker build -t yx-api .
+$ docker build -t driftmap-api .
 ----
 
 [source,shell]
 ----
-$ docker run --rm -p "8080:8080" yx-api
+$ docker run --rm -p "8080:8080" driftmap-api
 ----

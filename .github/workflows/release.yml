@@ -1,9 +1,8 @@
-name: Release 
+name: Release
 
 on:
   push:
     tags: [v*]
-    branches: [main]
 
 jobs:
 
@@ -25,15 +24,15 @@ jobs:
       - name: Build binaries
         run: |
           mkdir dist
-          GOOS=linux GOARCH=amd64 go build -o dist/yx-linux-amd64 ./cmd/cli
-          GOOS=darwin GOARCH=amd64 go build -o dist/yx-darwin-amd64 ./cmd/cli
-          GOOS=windows GOARCH=amd64 go build -o dist/yx-windows-amd64.exe ./cmd/cli
+          GOOS=linux GOARCH=amd64 go build -o dist/driftmap-linux-amd64 ./cmd/cli
+          GOOS=darwin GOARCH=amd64 go build -o dist/driftmap-darwin-amd64 ./cmd/cli
+          GOOS=windows GOARCH=amd64 go build -o dist/driftmap-windows-amd64.exe ./cmd/cli
 
       - name: Upload a Build Artifact
         uses: actions/upload-artifact@v4.6.2
         with:
-          name: yx-binaries-${{ github.ref_name }}
-          path: dist/yx-*
+          name: driftmap-binaries-${{ github.ref_name }}
+          path: dist/driftmap-*
           if-no-files-found: error
 
   changelog:
@@ -42,7 +41,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release_body: ${{ steps.git-cliff.outputs.content }}
-      binaries-artifact-id: ${{ steps.artifact-upload-step.outputs.artifact-id }}
     steps:
 
       - name: Checkout
@@ -55,7 +53,7 @@ jobs:
         uses: orhun/git-cliff-action@v4
         id: git-cliff
         with:
-          config: cliff.toml
+          config: .gitcliff.toml
           args: -vv --latest --strip header
         env:
           OUTPUT: CHANGES.md
@@ -65,22 +63,22 @@ jobs:
 
     name: Create Release
     runs-on: ubuntu-latest
-    needs: changelog
+    needs: [build, changelog]
     steps:
 
       - uses: actions/download-artifact@v4
         with:
-          name: yx-binaries-${{ github.ref_name }}
+          name: driftmap-binaries-${{ github.ref_name }}
+          path: dist
 
       - name: Display structure of downloaded files
-        run: ls -R
+        run: ls -R dist
 
       - name: Upload the binary releases
         uses: svenstaro/upload-release-action@v2
         with:
-          file: */*.rpm
+          file: dist/driftmap-*
           file_glob: true
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref }}
           body: ${{ needs.changelog.outputs.release_body }}
-

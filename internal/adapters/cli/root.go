@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
+	"github.com/kriipke/driftmap/pkg/differ"
 	"gopkg.in/yaml.v3"
-	"github.com/kriipke/yiff/pkg/differ"
 
 	"github.com/spf13/cobra"
 )
@@ -21,19 +23,46 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "yiff [fileA.yaml] [fileB.yaml]",
-	Short: "YAML diff tool for Helm values and GitOps",
-	Long:  "Diff Helm values YAML files or directories between files or git refs. Supports per-variable, per-file, and per-directory comparisons.",
-	Args:  cobra.MaximumNArgs(2),
+	Use:   "driftmap [A] [B]",
+	Short: "Detect configuration drift between two sets of YAML",
+	Long: `DriftMap reports the drift between two sets of YAML configuration.
+
+It works on:
+  * Helm chart values -- compare two values.yaml files
+    (e.g. values-dev.yaml vs values-prod.yaml).
+  * Vault secrets -- compare two directories of secrets exported as YAML
+    files with vaultsync (github.com/kriipke/vaultsync), e.g. a before/
+    and after/ snapshot.
+
+A and B may both be files (single-file diff) or both be directories
+(recursive per-file diff). Alternatively, use --from/--to/--path to compare
+all YAML files under a path between two git refs.`,
+	Args: cobra.MaximumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Directory diff mode (git)
+		// Directory diff mode (git refs)
 		if fromRef != "" && toRef != "" && diffPath != "" {
 			return runGitRefDirDiff(fromRef, toRef, diffPath, outputFormat)
 		}
 
-		// Single file diff mode
 		if len(args) == 2 {
-			return runFileDiff(args[0], args[1], outputFormat)
+			aIsDir, err := isDir(args[0])
+			if err != nil {
+				return fmt.Errorf("Failed to stat %s: %w", args[0], err)
+			}
+			bIsDir, err := isDir(args[1])
+			if err != nil {
+				return fmt.Errorf("Failed to stat %s: %w", args[1], err)
+			}
+			switch {
+			case aIsDir && bIsDir:
+				// Directory diff mode (local dirs, e.g. vaultsync output)
+				return runDirDiff(args[0], args[1], outputFormat)
+			case !aIsDir && !bIsDir:
+				// Single file diff mode
+				return runFileDiff(args[0], args[1], outputFormat)
+			default:
+				return fmt.Errorf("both arguments must be files or both directories (%s and %s differ)", args[0], args[1])
+			}
 		}
 
 		// Print usage if not enough arguments
@@ -46,9 +75,17 @@ func init() {
 	rootCmd.Flags().StringVar(&fromRef, "from", "", "Git ref/tag/commit for the base comparison (used with --to and --path)")
 	rootCmd.Flags().StringVar(&toRef, "to", "", "Git ref/tag/commit for the target comparison (used with --from and --path)")
 	rootCmd.Flags().StringVar(&diffPath, "path", "", "Compare all yaml files under this path between --from and --to refs")
-	rootCmd.Flags().StringVarP(&outputFormat, "output", "o", "shell", "Output format: 'shell' (default) or 'yaml'")
+	rootCmd.Flags().StringVarP(&outputFormat, "output", "o", "shell", "Output format: 'shell' (default), 'yaml', or 'columns'")
 }
 
+// isDir reports whether path exists and is a directory.
+func isDir(path string) (bool, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return false, err
+	}
+	return fi.IsDir(), nil
+}
 
 // Entrypoint for Cobra
 func Execute() error {
@@ -88,7 +125,6 @@ func colorEnabled() bool {
 	return (fi.Mode() & os.ModeCharDevice) != 0
 }
 
-
 // Update runFileDiff signature!
 func runFileDiff(fileA, fileB, outputFormat string) error {
 	dataA, err := os.ReadFile(fileA)
@@ -111,9 +147,41 @@ func runFileDiff(fileA, fileB, outputFormat string) error {
 	return printDiffs(diffs, outputFormat)
 }
 
+// perFileDiff holds the drift found for a single file present in both sides.
+type perFileDiff struct {
+	File  string
+	Diffs []differ.VariableDiff
+}
+
+// isYAMLFile reports whether a filename looks like a YAML file.
+func isYAMLFile(name string) bool {
+	return strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml")
+}
+
+// --- Directory diff between two local directories (e.g. vaultsync output) ---
+func runDirDiff(dirA, dirB, outputFormat string) error {
+	filesA, err := listDirYAMLFiles(dirA)
+	if err != nil {
+		return fmt.Errorf("Failed to list files under %s: %w", dirA, err)
+	}
+	filesB, err := listDirYAMLFiles(dirB)
+	if err != nil {
+		return fmt.Errorf("Failed to list files under %s: %w", dirB, err)
+	}
+
+	changed, added, removed, err := diffFileSets(
+		filesA, filesB,
+		func(rel string) ([]byte, error) { return os.ReadFile(filepath.Join(dirA, rel)) },
+		func(rel string) ([]byte, error) { return os.ReadFile(filepath.Join(dirB, rel)) },
+	)
+	if err != nil {
+		return err
+	}
+	return printDirSummary(changed, added, removed, outputFormat)
+}
+
 // --- Directory diff between git refs ---
 func runGitRefDirDiff(fromRef, toRef, relPath, outputFormat string) error {
-	// 1. Get list of yaml files in path for both refs
 	filesA, err := listGitFiles(fromRef, relPath)
 	if err != nil {
 		return fmt.Errorf("Failed to list files for ref %s: %w", fromRef, err)
@@ -123,37 +191,54 @@ func runGitRefDirDiff(fromRef, toRef, relPath, outputFormat string) error {
 		return fmt.Errorf("Failed to list files for ref %s: %w", toRef, err)
 	}
 
-	// 2. Build sets for matching, added, removed
+	changed, added, removed, err := diffFileSets(
+		filesA, filesB,
+		func(f string) ([]byte, error) { return gitShowFile(fromRef, f) },
+		func(f string) ([]byte, error) { return gitShowFile(toRef, f) },
+	)
+	if err != nil {
+		return err
+	}
+	return printDirSummary(changed, added, removed, outputFormat)
+}
+
+// diffFileSets compares two sets of YAML file keys, loading each side's contents
+// via the provided readers, and classifies them into changed/added/removed.
+func diffFileSets(filesA, filesB []string, loadA, loadB func(string) ([]byte, error)) (changed []perFileDiff, added, removed []string, err error) {
 	setA, setB := map[string]struct{}{}, map[string]struct{}{}
-	for _, f := range filesA { setA[f] = struct{}{} }
-	for _, f := range filesB { setB[f] = struct{}{} }
+	for _, f := range filesA {
+		setA[f] = struct{}{}
+	}
+	for _, f := range filesB {
+		setB[f] = struct{}{}
+	}
 
 	allFiles := map[string]struct{}{}
-	for f := range setA { allFiles[f] = struct{}{} }
-	for f := range setB { allFiles[f] = struct{}{} }
-
-	type perFileDiff struct {
-		File  string
-		Diffs []differ.VariableDiff
+	for f := range setA {
+		allFiles[f] = struct{}{}
 	}
-	var changed []perFileDiff
-	var added, removed []string
+	for f := range setB {
+		allFiles[f] = struct{}{}
+	}
 
 	for file := range allFiles {
 		_, inA := setA[file]
 		_, inB := setB[file]
 		switch {
 		case inA && inB:
-			// Get file contents at both refs
-			dataA, errA := gitShowFile(fromRef, file)
-			dataB, errB := gitShowFile(toRef, file)
+			dataA, errA := loadA(file)
+			dataB, errB := loadB(file)
 			if errA != nil || errB != nil {
-				continue // skip erroring files
+				continue // skip files that cannot be read on either side
 			}
-			yamlA, err := differ.LoadYAMLMap(dataA)
-			if err != nil { continue }
-			yamlB, err := differ.LoadYAMLMap(dataB)
-			if err != nil { continue }
+			yamlA, e := differ.LoadYAMLMap(dataA)
+			if e != nil {
+				continue
+			}
+			yamlB, e := differ.LoadYAMLMap(dataB)
+			if e != nil {
+				continue
+			}
 			diffs := differ.Diff(yamlA, yamlB)
 			if len(diffs) > 0 {
 				changed = append(changed, perFileDiff{File: file, Diffs: diffs})
@@ -165,31 +250,64 @@ func runGitRefDirDiff(fromRef, toRef, relPath, outputFormat string) error {
 		}
 	}
 
-	// 4. Print summary
-	// fmt.Printf("YAML diff summary for %s between %s and %s:\n", relPath, fromRef, toRef)
-	// if len(changed) > 0 {
-	// 	fmt.Println("\nChanged files:")
-	// 	for _, c := range changed {
-	// 		fmt.Printf("  %s\n", c.File)
-	// 		printDiffs(c.Diffs, outputFormat)
-	// 	}
-	// }
-	// if len(added) > 0 {
-	// 	fmt.Println("\nAdded files:")
-	// 	for _, f := range added {
-	// 		fmt.Printf("  %s\n", f)
-	// 	}
-	// }
-	// if len(removed) > 0 {
-	// 	fmt.Println("\nRemoved files:")
-	// 	for _, f := range removed {
-	// 		fmt.Printf("  %s\n", f)
-	// 	}
-	// }
-	// if len(changed) == 0 && len(added) == 0 && len(removed) == 0 {
-	// 	fmt.Println("No differences found.")
-	// }
+	sort.Slice(changed, func(i, j int) bool { return changed[i].File < changed[j].File })
+	sort.Strings(added)
+	sort.Strings(removed)
+	return changed, added, removed, nil
+}
+
+// printDirSummary renders a per-file directory diff summary.
+func printDirSummary(changed []perFileDiff, added, removed []string, outputFormat string) error {
+	if len(changed) == 0 && len(added) == 0 && len(removed) == 0 {
+		fmt.Println("No differences found.")
+		return nil
+	}
+
+	if len(changed) > 0 {
+		fmt.Println("Changed files:")
+		for _, c := range changed {
+			fmt.Printf("\n# %s\n", c.File)
+			if err := printDiffs(c.Diffs, outputFormat); err != nil {
+				return err
+			}
+		}
+	}
+	if len(added) > 0 {
+		fmt.Println("\nAdded files:")
+		for _, f := range added {
+			fmt.Printf("  %s\n", f)
+		}
+	}
+	if len(removed) > 0 {
+		fmt.Println("\nRemoved files:")
+		for _, f := range removed {
+			fmt.Printf("  %s\n", f)
+		}
+	}
 	return nil
+}
+
+// listDirYAMLFiles walks dir recursively and returns YAML file paths relative to dir.
+func listDirYAMLFiles(dir string) ([]string, error) {
+	var files []string
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !isYAMLFile(d.Name()) {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		files = append(files, rel)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return files, nil
 }
 
 // List all *.yaml and *.yml files in a given path at a specific git ref
@@ -202,7 +320,7 @@ func listGitFiles(ref, relPath string) ([]string, error) {
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	var files []string
 	for _, f := range lines {
-		if strings.HasSuffix(f, ".yaml") || strings.HasSuffix(f, ".yml") {
+		if isYAMLFile(f) {
 			files = append(files, f)
 		}
 	}
@@ -214,7 +332,6 @@ func gitShowFile(ref, file string) ([]byte, error) {
 	cmd := exec.Command("git", "show", fmt.Sprintf("%s:%s", ref, file))
 	return cmd.Output()
 }
-
 
 func formatValue(val interface{}) string {
 	switch v := val.(type) {
