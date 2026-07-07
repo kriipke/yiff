@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -99,31 +98,6 @@ const (
 	ColorRed    = "\x1b[31;1m"
 	ColorBold   = "\x1b[1m"
 )
-
-var ansiRegexp = regexp.MustCompile(`\x1b\[[0-9;]*m`)
-
-func visibleLen(s string) int {
-	return len(ansiRegexp.ReplaceAllString(s, ""))
-}
-
-func spaces(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	return fmt.Sprintf("%*s", n, "")
-}
-
-func colorEnabled() bool {
-	term := os.Getenv("TERM")
-	if term == "" || term == "dumb" {
-		return false
-	}
-	fi, err := os.Stdout.Stat()
-	if err != nil {
-		return false
-	}
-	return (fi.Mode() & os.ModeCharDevice) != 0
-}
 
 // Update runFileDiff signature!
 func runFileDiff(fileA, fileB, outputFormat string) error {
@@ -333,17 +307,6 @@ func gitShowFile(ref, file string) ([]byte, error) {
 	return cmd.Output()
 }
 
-func formatValue(val interface{}) string {
-	switch v := val.(type) {
-	case string:
-		return fmt.Sprintf("“%s”", v)
-	case nil:
-		return "null"
-	default:
-		return fmt.Sprintf("%v", v)
-	}
-}
-
 // formatValuePlain returns string values as-is (no quotes).
 func formatValuePlain(val interface{}) string {
 	switch v := val.(type) {
@@ -354,10 +317,6 @@ func formatValuePlain(val interface{}) string {
 	default:
 		return fmt.Sprintf("%v", v)
 	}
-}
-
-func colorize(s, color string) string {
-	return color + s + ColorReset
 }
 
 func formatShellValue(val interface{}) string {
