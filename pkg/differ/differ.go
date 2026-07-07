@@ -101,12 +101,22 @@ func Diff(a, b map[string]interface{}) []core.VariableDiff {
 	return diffs
 }
 
-// Optionally: Add a LoadYAML helper if you want to share file loading (or move to adapters/io)
+// LoadYAMLMap parses a YAML document into a string-keyed map. The document's
+// top level must be a mapping (as Helm values files and vaultsync secret files
+// are); an empty document is treated as an empty mapping. A non-mapping root
+// (list or scalar) returns an error rather than panicking.
 func LoadYAMLMap(data []byte) (map[string]interface{}, error) {
 	var raw interface{}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil, err
 	}
-	m := convertToStringMap(raw)
-	return m.(map[string]interface{}), nil
+	if raw == nil {
+		// Empty or explicitly-null document: treat as an empty mapping.
+		return map[string]interface{}{}, nil
+	}
+	m, ok := convertToStringMap(raw).(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("top-level YAML must be a mapping, got %T", raw)
+	}
+	return m, nil
 }
